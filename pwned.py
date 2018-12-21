@@ -76,7 +76,7 @@ def parse_password_entry(entry):
     except Exception as e:
         print(e)
 
-
+# Function that parses an element of the raw most-common-word RDD and returns a tuple (word, sha1)
 def parse_common_word_entry(entry):
     return entry, sha1(entry).hexdigest()
 
@@ -110,27 +110,26 @@ with time_usage('Searching for \'love\''):
 # search for a random word in most common words list
 # insight: if parsedPasswordRDD is cached above, this operation takes factor 10 less time
 # caching parsedCommonWordsRDD doesn't result in a performance improvement though
-with time_usage('Searching for a random most common word'):
-    mostCommonWord = parsedCommonWordsRDD.takeSample(False, 1)
-    print('Searching for %s' % mostCommonWord[0][0])
-    res = parsedPasswordRDD \
-        .filter(lambda (pw, count): pw == mostCommonWord[0][1])
-    print('Found %s entries' % res.count())
+# with time_usage('Searching for a random most common word'):
+#     mostCommonWord = parsedCommonWordsRDD.takeSample(False, 1)
+#     print('Searching for %s' % mostCommonWord[0][0])
+#     res = parsedPasswordRDD \
+#         .filter(lambda (pw, count): pw == mostCommonWord[0][1])
+#     print('Found %s entries' % res.count())
 
-# search for every word in parsedCommonWordsRDD
-# for this, the passwords rdd needs to be broadcast
-# TODO: is this the only and most performant way of doing this?
-broadcastPasswordRDD = sc.broadcast(parsedPasswordRDD.collectAsMap())
+# search if hash exists in most common words
+# for this, the most-common-words rdd needs to be broadcast
+broadcastCommonWordsRDD = sc.broadcast(parsedCommonWordsRDD.map(lambda word: (word[1], word[0])).collectAsMap())
 with time_usage('Searching for every most common word'):
     # helper function
     def search_for_word(word):
         # print('Searching for %s' % word[0])
         # broadcastPasswordRDD.value is a dict!
-        if word[1] in broadcastPasswordRDD.value:
-            return word[0], True
+        if word[0] in broadcastCommonWordsRDD.value:
+            return broadcastCommonWordsRDD.value[word[0]], True
         else:
             return word[0], False
-    res = parsedCommonWordsRDD \
+    res = parsedPasswordRDD \
         .map(search_for_word)
     print('Found these words:')
     print(res.filter(lambda (el, value): value is True).map(lambda (el, value): el).collect())
