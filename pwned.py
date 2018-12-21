@@ -99,6 +99,7 @@ print('Preprocessing completed.')
 # ---------------------------------- SEARCH
 
 print('Searching for words...')
+
 # search for a single word
 with time_usage('Searching for \'love\''):
     print('Searching for \'love\'')
@@ -115,5 +116,23 @@ with time_usage('Searching for a random most common word'):
     res = parsedPasswordRDD \
         .filter(lambda (pw, count): pw == mostCommonWord[0][1])
     print('Found %s entries' % res.count())
+
+# search for every word in parsedCommonWordsRDD
+# for this, the passwords rdd needs to be broadcast
+# TODO: is this the only and most performant way of doing this?
+broadcastPasswordRDD = sc.broadcast(parsedPasswordRDD.collectAsMap())
+with time_usage('Searching for every most common word'):
+    # helper function
+    def search_for_word(word):
+        # print('Searching for %s' % word[0])
+        # broadcastPasswordRDD.value is a dict!
+        if word[1] in broadcastPasswordRDD.value:
+            return word[0], True
+        else:
+            return word[0], False
+    res = parsedCommonWordsRDD \
+        .map(search_for_word)
+    print('Found these words:')
+    print(res.filter(lambda (el, value): value is True).map(lambda (el, value): el).collect())
 
 print('Finished.')
