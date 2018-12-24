@@ -1,22 +1,25 @@
-from __future__ import print_function # necessary because Dataproc runs Python 2.7
+from __future__ import print_function  # necessary because Dataproc runs Python 2.7
 import sys
 import time
 import logging
 from contextlib import contextmanager
 from hashlib import sha1
 from pyspark import SparkContext
+from pyspark import SQLContext
+from pyspark import SparkConf
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType
 
 # Constants
 LOCAL = True  # TODO: set dynamically
 
 BUCKET_PATH = 'gs://dataproc-ec96d46c-3f60-46a2-acb4-066fe551dff8-europe-west2/'
 
-
 # Password list taken from https://haveibeenpwned.com/Passwords, SHA 1, 9.18 GB, containing over
 # half a billion pwned passwords
 
 PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
 COMMONWORDS_PATH = '10000-most-common-words.txt'
+# COMMONWORDS_PATH = 'first_16M_most-common-words.txt'
 
 # if script is executed on Dataproc, bucket path needs to be prepended
 if LOCAL is False:
@@ -41,14 +44,77 @@ def time_usage(name=""):
     logging.info('%s: elapsed seconds: %s', name, elapsed_seconds)
 
 
-sc = SparkContext()
+sc_conf = SparkConf()
+sc_conf.setAppName("pwned")
+sc_conf.set('spark.executor.memory', '2g')
+sc_conf.set('spark.driver.memory', '2g')
+# sc_conf.set('spark.executor.cores', '4')
+sc_conf.set('spark.cores.max', '4')
+# sc_conf.set('spark.logConf', True)
+
+sc_conf.set('spark.sql.crossJoin.enabled', True)
+sc = SparkContext(conf=sc_conf)
+sqlc = SQLContext(sc)
 # stagemetrics = StageMetrics(spark)
 print(sys.version_info)
 
 print('Spark version %s running.' % sc.version)
 
-# print 'Config values:'
-# print sc.getConf().getAll()
+print('Config values of Schpark context: ')
+print(sc.getConf().getAll())
+
+### Approach using df and sql
+print('Reading in files...')
+with time_usage('Reading in files'):
+    pw_schema = StructType([
+        StructField("hashedpw", StringType(), False),
+        StructField("h", IntegerType(), True)
+    ])
+
+    pw_df = sqlc.read.csv(PWS_PATH, header=False, schema=pw_schema, sep=':')
+    common_words_schema = StructType([
+        StructField("word", StringType(), False)
+    ])
+    # common_words_df = sqlc.createDataFrame(sc.textFile(COMMONWORDS_PATH), schema=common_words_schema)
+    common_words_df = sqlc.read.csv(COMMONWORDS_PATH, header=False, schema=common_words_schema, sep='|')
+
+print(pw_df.head())
+print(pw_df.printSchema())
+print(common_words_df.head())
+print(common_words_df.printSchema())
+
+# The hashes of the common words are only needed when comparing
+# Idea: Use a function during sql query that hashes the words on-demand
+
+sqlc.registerFunction("sha1hash", lambda x: sha1(x).hexdigest().upper())
+sqlc.registerDataFrameAsTable(pw_df, "pw_df")
+sqlc.registerDataFrameAsTable(common_words_df, "common_words_df")
+
+# example of how to apply the hash function within sql
+print(sqlc.sql("SELECT *, sha1hash(word) as hash FROM common_words_df").take(2))
+
+# direct function does not work
+# sha1hash(common_words_df.word) as hash
+# print(sqlc.sql("""SELECT common_words_df.word, pw_df.h
+#               FROM common_words_df
+#               JOIN pw_df ON sha1hash(common_words_df.word) = pw_df.hashedpw""").collect())
+
+# other approach:
+# we add the hashed column to each word first
+with time_usage('hashing common words by adding an extra column'):
+    common_words_df = common_words_df.rdd \
+        .map(lambda x: (x['word'], sha1(x['word']).hexdigest().upper())) \
+        .toDF(['word', 'hashedword'])
+
+print("joining tables...")
+with time_usage('Joining tables on da hash'):
+    j = common_words_df.join(pw_df, common_words_df.hashedword == pw_df.hashedpw) \
+        .select(common_words_df['word'], pw_df['h'])
+    print(j.orderBy("h").show(10000))
+    print("Count: " + str(j.count()))
+
+
+### Approach using lower level RDD
 
 print('Reading in files...')
 with time_usage('Reading in files'):
@@ -75,6 +141,7 @@ def parse_password_entry(entry):
         return entry[0].lower(), entry[1]
     except Exception as e:
         print(e)
+
 
 # Function that parses an element of the raw most-common-word RDD and returns a tuple (word, sha1)
 def parse_common_word_entry(entry):
@@ -129,6 +196,8 @@ with time_usage('Searching for every most common word'):
             return broadcastCommonWordsRDD.value[word[0]], True
         else:
             return word[0], False
+
+
     res = parsedPasswordRDD \
         .map(search_for_word)
     print('Found these words:')
