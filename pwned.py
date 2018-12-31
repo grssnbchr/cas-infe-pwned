@@ -10,6 +10,7 @@ from pyspark import SparkContext
 from pyspark import SQLContext
 from pyspark import SparkConf
 from pyspark.sql.types import StructType, StructField, IntegerType, StringType
+from pyspark.sql import Row
 
 # Constants
 LOCAL = True  # TODO: set dynamically
@@ -20,7 +21,8 @@ BUCKET_PATH = 'gs://dataproc-ec96d46c-3f60-46a2-acb4-066fe551dff8-europe-west2/'
 # half a billion pwned passwords
 
 # PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
-PWS_PATH = 'first_512M_pwned-passwords-ordered-by-hash.txt/'
+PWS_PATH = 'first_640M_pwned-passwords-ordered-by-hash.txt/'
+#PWS_PATH = 'pwned-passwords-ordered-by-hash.txt'
 COMMONWORDS_PATH = '10000-most-common-words.txt'
 # COMMONWORDS_PATH = 'first_16M_most-common-words.txt'
 
@@ -46,29 +48,9 @@ def time_usage(name=""):
     elapsed_seconds = float('%.4f' % (end - start))
     logging.info('%s: elapsed seconds: %s', name, elapsed_seconds)
 
-
-sc_conf = SparkConf()
-sc_conf.setAppName("pwned")
-sc_conf.set('spark.executor.memory', '2g')
-sc_conf.set('spark.driver.memory', '4g')
-# sc_conf.set('spark.executor.cores', '4')
-sc_conf.set('spark.cores.max', '4')
-# sc_conf.set('spark.logConf', True)
-
-sc_conf.set('spark.sql.crossJoin.enabled', True)
-sc = SparkContext(conf=sc_conf)
-sqlc = SQLContext(sc)
-# stagemetrics = StageMetrics(spark)
-print(sys.version_info)
-
-print('Spark version %s running.' % sc.version)
-
-print('Config values of Schpark context: ')
-print(sc.getConf().getAll())
-
-
 # Approach using df and sql
 def df_sql_approach():
+    print('DF SQL APPROACH ----------------')
     print('Reading in files...')
     with time_usage('Reading in files'):
         pw_schema = StructType([
@@ -82,8 +64,9 @@ def df_sql_approach():
         ])
         # common_words_df = sqlc.createDataFrame(sc.textFile(COMMONWORDS_PATH), schema=common_words_schema)
         common_words_df = sqlc.read.csv(COMMONWORDS_PATH, header=False, schema=common_words_schema, sep='|')
-
+    print('Head of df:')
     print(pw_df.head())
+    print('Schema of df:')
     print(pw_df.printSchema())
     print(common_words_df.head())
     print(common_words_df.printSchema())
@@ -96,6 +79,7 @@ def df_sql_approach():
     sqlc.registerDataFrameAsTable(common_words_df, "common_words_df")
 
     # example of how to apply the hash function within sql
+    print('Example of executing hash function within sql:')
     print(sqlc.sql("SELECT *, sha1hash(word) as hash FROM common_words_df").take(2))
 
     # direct function does not work
@@ -121,12 +105,13 @@ def df_sql_approach():
     with time_usage('Joining tables on da hash'):
         j = common_words_df.join(pw_df, common_words_df.hashedword == pw_df.hashedpw) \
             .select(common_words_df['word'], pw_df['h'])
-        j.orderBy("h").show(10000)
+        j.orderBy("h", ascending=False).show(100)
         print("Count: " + str(j.count()))
 
 
 # Approach using lower level RDD
 def rdd_approach():
+    print('RDD APPROACH ----------------')
     print('Reading in files...')
     with time_usage('Reading in files'):
         rawPasswordRDD = sc.textFile(PWS_PATH)
@@ -199,20 +184,44 @@ def rdd_approach():
             # print('Searching for %s' % word[0])
             # broadcastPasswordRDD.value is a dict!
             if word[0] in broadcastCommonWordsRDD.value:
-                return broadcastCommonWordsRDD.value[word[0]], True
+                # return tuple of word, count
+                return broadcastCommonWordsRDD.value[word[0]], word[1]
             else:
                 return word[0], False
-
         res = parsedPasswordRDD \
             .map(search_for_word)
         print('Found these words:')
-        print(res.filter(lambda (el, value): value is True).map(lambda (el, value): el).collect())
+        res = res.filter(lambda (el, value): value is not False)
+        res_list = res.collect()
+        print('There are %s common English words occurring in passwords.' % len(res_list))
 
+    # Convert to DataFrame for better print output
+    res = res.map(lambda (el, value): Row(hashedpw=el, h=int(value)))
+    res_df = sqlc.createDataFrame(res)
+    res_df.orderBy('h', ascending=False).show(100)
+
+
+
+# MAIN
+
+sc_conf = SparkConf()
+sc_conf.setAppName("pwned")
+sc_conf.set('spark.executor.memory', '2g')
+sc_conf.set('spark.driver.memory', '4g')
+sc_conf.set('spark.cores.max', '4')
+
+sc_conf.set('spark.sql.crossJoin.enabled', True)
+sc = SparkContext(conf=sc_conf)
+sqlc = SQLContext(sc)
+print(sys.version_info)
+
+print('Spark version %s running.' % sc.version)
+
+print('Config values of Schpark context: ')
+print(sc.getConf().getAll())
 
 rdd_approach()
 df_sql_approach()
 
-# 10k words in 64M_pwned pws
-# INFO:root:Searching for every most common word [broadcasted: elapsed seconds: 5.4807
-
 print('Finished.')
+
