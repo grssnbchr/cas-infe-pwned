@@ -105,8 +105,8 @@ def df_sql_approach():
     with time_usage('Joining tables on da hash'):
         j = common_words_df.join(pw_df, common_words_df.hashedword == pw_df.hashedpw) \
             .select(common_words_df['word'], pw_df['h'])
-        j.orderBy("h", ascending=False).show(100)
-        print("Count: " + str(j.count()))
+    j.orderBy("h", ascending=False).show(100)
+    print("Count: " + str(j.count()))
 
 
 # Approach using lower level RDD
