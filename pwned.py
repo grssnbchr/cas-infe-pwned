@@ -21,6 +21,9 @@ BUCKET_PATH = 'gs://dataproc-ec96d46c-3f60-46a2-acb4-066fe551dff8-europe-west2/'
 # half a billion pwned passwords
 
 # PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
+PWS_PATH = 'first_512M_pwned-passwords-ordered-by-hash.txt/'
+PWS_PATH = 'pwned-passwords-ordered-by-hash.txt/'
+
 PWS_PATH = 'first_640M_pwned-passwords-ordered-by-hash.txt/'
 #PWS_PATH = 'pwned-passwords-ordered-by-hash.txt'
 COMMONWORDS_PATH = '10000-most-common-words.txt'
@@ -40,7 +43,7 @@ logging.basicConfig(level=logging.INFO)
 @contextmanager
 def time_usage(name=""):
     """log the time usage in a code block
-    prefix: the prefix text to show
+    name: the prefix text to show
     """
     start = time.time()
     yield
@@ -95,11 +98,11 @@ def df_sql_approach():
             .map(lambda x: (x['word'], sha1(x['word']).hexdigest().upper())) \
             .toDF(['word', 'hashedword'])
 
-    print("search for single word...")
-    with time_usage("search for love ❤"):
-        j = pw_df.filter(pw_df.hashedpw == sha1('love').hexdigest().upper())
-        j.show(10000)
-        print("Count: " + str(j.count()))
+    # print("search for single word...")
+    # with time_usage("search for love ❤"):
+    #     j = pw_df.filter(pw_df.hashedpw == sha1('love').hexdigest().upper())
+    #     j.show(10000)
+    #     print("Count: " + str(j.count()))
 
     print("joining tables...")
     with time_usage('Joining tables on da hash'):
