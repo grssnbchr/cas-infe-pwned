@@ -22,6 +22,7 @@ BUCKET_PATH = 'gs://dataproc-ec96d46c-3f60-46a2-acb4-066fe551dff8-europe-west2/'
 
 # PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
 PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
+
 #PWS_PATH = 'pwned-passwords-ordered-by-hash.txt'
 COMMONWORDS_PATH = '10000-most-common-words.txt'
 # COMMONWORDS_PATH = 'first_16M_most-common-words.txt'
@@ -40,7 +41,7 @@ logging.basicConfig(level=logging.INFO)
 @contextmanager
 def time_usage(name=""):
     """log the time usage in a code block
-    prefix: the prefix text to show
+    name: the prefix text to show
     """
     start = time.time()
     yield
@@ -107,7 +108,6 @@ def df_sql_approach():
                 .select(common_words_df['word'], pw_df['h'])
             j.orderBy("h", ascending=False).show(100)
         print("Count: " + str(j.count()))
-
 
 # Approach using lower level RDD
 def rdd_approach():
