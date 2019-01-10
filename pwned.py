@@ -12,6 +12,8 @@ from pyspark import SparkConf
 from pyspark.sql.types import StructType, StructField, IntegerType, StringType
 from pyspark.sql import Row
 
+from pyspark.sql.functions import broadcast
+
 # Constants
 LOCAL = True  # TODO: set dynamically
 
@@ -21,11 +23,10 @@ BUCKET_PATH = 'gs://dataproc-ec96d46c-3f60-46a2-acb4-066fe551dff8-europe-west2/'
 # half a billion pwned passwords
 
 # PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
-PWS_PATH = 'first_64M_pwned-passwords-ordered-by-hash.txt/'
+PWS_PATH = 'first_512M_pwned-passwords-ordered-by-hash.txt/'
 
-#PWS_PATH = 'pwned-passwords-ordered-by-hash.txt'
+PWS_PATH = 'pwned-passwords-ordered-by-hash.txt'
 COMMONWORDS_PATH = '10000-most-common-words.txt'
-# COMMONWORDS_PATH = 'first_16M_most-common-words.txt'
 
 # if script is executed on Dataproc, bucket path needs to be prepended
 if LOCAL is False:
@@ -65,12 +66,12 @@ def df_sql_approach():
     # common_words_df = sqlc.createDataFrame(sc.textFile(COMMONWORDS_PATH), schema=common_words_schema)
     common_words_df = sqlc.read.csv(COMMONWORDS_PATH, header=False, schema=common_words_schema, sep='|')
     with time_usage('DF SQL APPROACH'):
-        print('Head of df:')
-        print(pw_df.head())
-        print('Schema of df:')
-        print(pw_df.printSchema())
-        print(common_words_df.head())
-        print(common_words_df.printSchema())
+        # print('Head of df:')
+        # print(pw_df.head())
+        # print('Schema of df:')
+        # print(pw_df.printSchema())
+        # print(common_words_df.head())
+        # print(common_words_df.printSchema())
 
         # The hashes of the common words are only needed when comparing
         # Idea: Use a function during sql query that hashes the words on-demand
@@ -80,8 +81,8 @@ def df_sql_approach():
         sqlc.registerDataFrameAsTable(common_words_df, "common_words_df")
 
         # example of how to apply the hash function within sql
-        print('Example of executing hash function within sql:')
-        print(sqlc.sql("SELECT *, sha1hash(word) as hash FROM common_words_df").take(2))
+        # print('Example of executing hash function within sql:')
+        # print(sqlc.sql("SELECT *, sha1hash(word) as hash FROM common_words_df").take(2))
 
         # direct function does not work
         # sha1hash(common_words_df.word) as hash
@@ -96,15 +97,15 @@ def df_sql_approach():
                 .map(lambda x: (x['word'], sha1(x['word']).hexdigest().upper())) \
                 .toDF(['word', 'hashedword'])
 
-        print("search for single word...")
-        with time_usage("search for love ❤"):
-            j = pw_df.filter(pw_df.hashedpw == sha1('love').hexdigest().upper())
-            j.show(10000)
-            print("Count: " + str(j.count()))
+        # print("search for single word...")
+        # with time_usage("search for love ❤"):
+        #     j = pw_df.filter(pw_df.hashedpw == sha1('love').hexdigest().upper())
+        #     j.show(10000)
+        #     print("Count: " + str(j.count()))
 
         print("joining tables...")
         with time_usage('Joining tables on da hash'):
-            j = common_words_df.join(pw_df, common_words_df.hashedword == pw_df.hashedpw) \
+            j = broadcast(common_words_df).join(pw_df, common_words_df.hashedword == pw_df.hashedpw) \
                 .select(common_words_df['word'], pw_df['h'])
             j.orderBy("h", ascending=False).show(100)
         print("Count: " + str(j.count()))
@@ -159,11 +160,11 @@ def rdd_approach():
         # ---------------------------------- SEARCH
 
         # search for a single word
-        with time_usage('Searching for \'love\''):
-            print('Searching for \'love\'')
-            res = parsedPasswordRDD \
-                .filter(lambda (pw, count): pw == sha1('love').hexdigest())
-            print('Found %s entries' % res.count())
+        # with time_usage('Searching for \'love\''):
+        #     print('Searching for \'love\'')
+        #     res = parsedPasswordRDD \
+        #         .filter(lambda (pw, count): pw == sha1('love').hexdigest())
+        #     print('Found %s entries' % res.count())
 
         # search for a random word in most common words list
         # insight: if parsedPasswordRDD is cached above, this operation takes factor 10 less time
@@ -202,14 +203,26 @@ def rdd_approach():
         res_df.orderBy('h', ascending=False).show(100)
 
 
+def count_all_occurrences():
+    pw_schema = StructType([
+        StructField("hashedpw", StringType(), False),
+        StructField("h", IntegerType(), True)
+    ])
+    pw_df = sqlc.read.csv(PWS_PATH, header=False, schema=pw_schema, sep=':')
+    common_words_schema = StructType([
+        StructField("word", StringType(), False)
+    ])
+    sqlc.registerDataFrameAsTable(pw_df, "pw_df")
+    sqlc.sql('Select sum(h) from pw_df').show()
+
 
 # MAIN
 
 sc_conf = SparkConf()
 sc_conf.setAppName("pwned")
-sc_conf.set('spark.executor.memory', '2g')
-sc_conf.set('spark.driver.memory', '4g')
-sc_conf.set('spark.cores.max', '4')
+# sc_conf.set('spark.executor.memory', '2g')
+# sc_conf.set('spark.driver.memory', '4g')
+# sc_conf.set('spark.cores.max', '4')
 
 sc_conf.set('spark.sql.crossJoin.enabled', True)
 sc = SparkContext(conf=sc_conf)
@@ -221,8 +234,8 @@ print('Spark version %s running.' % sc.version)
 print('Config values of Schpark context: ')
 print(sc.getConf().getAll())
 
-runner = rdd_approach, df_sql_approach
 
+runner = rdd_approach, df_sql_approach, count_all_occurrences
 for f in runner:
     f()
 
